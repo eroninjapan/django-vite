@@ -1,7 +1,4 @@
-import requests
-from requests.adapters import HTTPAdapter
 import json
-import urllib3
 from pathlib import Path
 from typing import Dict, List, Callable, NamedTuple, Optional, Union
 from urllib.parse import urljoin
@@ -19,6 +16,50 @@ from django_vite.core.exceptions import (
 from django_vite.core.tag_generator import Tag, TagGenerator, attrs_to_str
 
 DEFAULT_APP_NAME = "default"
+
+def print_debug(msg):
+    print(f"[django-vite] {msg}")
+
+def vite_is_serving(config: "DjangoViteConfig") -> bool:
+    """
+    ====
+    When running in "dev mode", check that an actual vite webserver is running
+    If not: fallback to serving the actual bundled version read from the manifest.json
+    ====
+    When "dev mode" was false to begin with, this means that we're running in prod and should never
+    check for a running vite webserver instance to begin with
+    """
+    if config.dev_mode:
+        print_debug("Evaluating devmode...")
+        # Hacky way to check if the vite webserver is serving something
+        import requests
+        from requests.adapters import HTTPAdapter
+        import urllib3
+        vite_webserver_url = f"http://{config.dev_server_host}:{config.dev_server_port}/"
+        try:
+            session = requests.Session()
+            session.mount(vite_webserver_url, HTTPAdapter(max_retries=0))
+            response = session.get(vite_webserver_url)
+            return response.status_code == 404
+        except urllib3.exceptions.MaxRetryError:
+            return False
+        except requests.exceptions.ConnectionError:
+            return False
+    else:
+        return False
+
+def open_manifest(path):
+    try:
+        return open(self.manifest_path, "r")
+    except Exception as e:
+        print_debug("Failed to open, try fallback....")
+
+    import io
+    import requests
+    response = requests.get(self.manifest_path)
+    response.raise_for_status()
+    manifest_file = io.StringIO(response.text)
+    return manifest_file
 
 
 class DjangoViteConfig(NamedTuple):
@@ -54,32 +95,6 @@ class DjangoViteConfig(NamedTuple):
     react_refresh_url: str = "@react-refresh"
 
 
-def evaluate_dev_mode(config: DjangoViteConfig) -> bool:
-    """
-    ====
-    When running in "dev mode", check that an actual vite webserver is running
-    If not: fallback to serving the actual bundled version read from the manifest.json
-    ====
-    When "dev mode" was false to begin with, this means that we're running in prod and should never
-    check for a running vite webserver instance to begin with
-    """
-    if config.dev_mode:
-        print("Evaluating dev mode..")
-        # Hacky way to check if the vite webserver is serving something
-        vite_webserver_url = f"http://{config.dev_server_host}:{config.dev_server_port}/"
-        try:
-            session = requests.Session()
-            session.mount(vite_webserver_url, HTTPAdapter(max_retries=0))
-            response = session.get(vite_webserver_url)
-            return response.status_code == 404
-        except urllib3.exceptions.MaxRetryError:
-            return False
-        except requests.exceptions.ConnectionError:
-            return False
-    else:
-        return False
-
-
 class ManifestEntry(NamedTuple):
     """
     Represent an entry for a file inside the "manifest.json".
@@ -109,6 +124,7 @@ class ManifestClient:
         self._config = config
         self.app_name = app_name
 
+        self.dev_mode = config.dev_mode if config.dev_mode and vite_is_serving(self._config) else False
         self.manifest_path = self._clean_manifest_path()
         self.legacy_polyfills_motif = config.legacy_polyfills_motif
 
@@ -118,7 +134,7 @@ class ManifestClient:
         # Don't crash if there is an error while parsing manifest.json.
         # Running DjangoViteAssetLoader.instance().checks() on startup will log any
         # errors.
-        if not evaluate_dev_mode(config):
+        if not self.dev_mode:
             try:
                 self._entries, self.legacy_polyfills_entry = self._parse_manifest()
             except DjangoViteManifestError:
@@ -140,7 +156,7 @@ class ManifestClient:
                 / self._config.static_url_prefix
                 / "manifest.json"
             )
-        elif not isinstance(initial_manifest_path, Path):
+        elif not isinstance(initial_manifest_path, Path) and not initial_manifest_path.startswith("http"):
             return Path(initial_manifest_path)
         else:
             return initial_manifest_path
@@ -148,7 +164,7 @@ class ManifestClient:
     def check(self) -> List[Warning]:
         """Check that manifest files are valid when dev_mode=False."""
         try:
-            if not evaluate_dev_mode(self._config):
+            if not self.dev_mode:
                 self._parse_manifest()
             return []
         except DjangoViteManifestError as exception:
@@ -184,14 +200,14 @@ class ManifestClient:
             DjangoViteManifestError: if cannot load the file or JSON in file is
                 malformed.
         """
-        if evaluate_dev_mode(self._config):
+        if self.dev_mode:
             return self.ParsedManifestOutput()
 
         entries: Dict[str, ManifestEntry] = {}
         legacy_polyfills_entry: Optional[ManifestEntry] = None
 
         try:
-            with open(self.manifest_path, "r") as manifest_file:
+            with open_manifest(self.manifest_path) as manifest_file:
                 manifest_content = manifest_file.read()
                 manifest_json = json.loads(manifest_content)
 
@@ -268,8 +284,12 @@ class DjangoViteAppClient:
         Returns:
             str -- Full URL to the asset.
         """
-        # Override from default library, we don't want the static_url_base to be used as in our case
-        # this is an actual url and not a relative path
+        static_url_base = urljoin(settings.STATIC_URL, self.static_url_prefix)
+        if not static_url_base.endswith("/"):
+            static_url_base += "/"
+
+        ## Override to allow non-Django served local static files (like with Nginx)
+        ##   this can be an actual url (localhost:port) and not a relative path
         static_url_base = urljoin('', self.static_url_prefix)
         if not static_url_base.endswith("/"):
             static_url_base += "/"
@@ -331,7 +351,7 @@ class DjangoViteAppClient:
                 this asset in your page.
         """
 
-        if evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             url = self._get_dev_server_url(path)
             return TagGenerator.script(
                 url,
@@ -396,7 +416,7 @@ class DjangoViteAppClient:
             str -- all <link> tags to preload
                 this asset.
         """
-        if evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             return ""
 
         tags: List[Tag] = []
@@ -509,7 +529,7 @@ class DjangoViteAppClient:
             str -- The URL of this asset.
         """
 
-        if evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             return self._get_dev_server_url(path)
 
         manifest_entry = self.manifest.get(path)
@@ -538,7 +558,7 @@ class DjangoViteAppClient:
             str -- The script tag to the polyfills.
         """
 
-        if evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             return ""
 
         polyfills_manifest_entry = self.manifest.legacy_polyfills_entry
@@ -583,7 +603,7 @@ class DjangoViteAppClient:
             str -- The script tag of this legacy asset .
         """
 
-        if evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             return ""
 
         manifest_entry = self.manifest.get(path)
@@ -609,7 +629,7 @@ class DjangoViteAppClient:
                 script tags.
         """
 
-        if not evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             return ""
 
         url = self._get_dev_server_url(self.ws_client_url)
@@ -634,7 +654,7 @@ class DjangoViteAppClient:
             config_key {str} -- Key of the configuration to use.
         """
 
-        if not evaluate_dev_mode(self._config):
+        if vite_is_serving(self._config):
             return ""
 
         url = self._get_dev_server_url(self.react_refresh_url)
