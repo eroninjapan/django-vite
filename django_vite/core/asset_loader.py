@@ -48,15 +48,15 @@ def vite_is_serving(config: "DjangoViteConfig") -> bool:
     else:
         return False
 
-def open_manifest(path):
+def open_manifest(path_to_manifest):
     try:
-        return open(self.manifest_path, "r")
+        return open(path_to_manifest, "r")
     except Exception as e:
-        print_debug("Failed to open, try fallback....")
+        print_debug("Failed to open relative manifest, try fallback....")
 
     import io
     import requests
-    response = requests.get(self.manifest_path)
+    response = requests.get(path_to_manifest)
     response.raise_for_status()
     manifest_file = io.StringIO(response.text)
     return manifest_file
