@@ -629,7 +629,7 @@ class DjangoViteAppClient:
                 script tags.
         """
 
-        if vite_is_serving(self._config):
+        if not vite_is_serving(self._config):
             return ""
 
         url = self._get_dev_server_url(self.ws_client_url)
@@ -654,7 +654,7 @@ class DjangoViteAppClient:
             config_key {str} -- Key of the configuration to use.
         """
 
-        if vite_is_serving(self._config):
+        if not vite_is_serving(self._config):
             return ""
 
         url = self._get_dev_server_url(self.react_refresh_url)
