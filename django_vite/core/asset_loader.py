@@ -16,9 +16,10 @@ from django_vite.core.exceptions import (
 from django_vite.core.tag_generator import Tag, TagGenerator, attrs_to_str
 
 DEFAULT_APP_NAME = "default"
+DEBUG = False
 
-def print_debug(msg):
-    print(f"[django-vite] {msg}")
+def print_debug(msg, always_show=False):
+    if DEBUG or always_show: print(f"[django-vite] {msg}")
 
 def vite_is_serving(config: "DjangoViteConfig") -> bool:
     """
@@ -52,7 +53,7 @@ def open_manifest(path_to_manifest):
     try:
         return open(path_to_manifest, "r")
     except Exception as e:
-        print_debug("Failed to open relative manifest, try fallback....")
+        print_debug(f"Failed to open relative manifest [{path_to_manifest}], try fallback...", always_show=True)
 
     import io
     import requests
