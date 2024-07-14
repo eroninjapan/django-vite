@@ -53,8 +53,9 @@ def open_manifest(path_to_manifest):
     try:
         return open(path_to_manifest, "r")
     except Exception as e:
-        print_debug(f"Failed to open relative manifest [{path_to_manifest}], try fallback...", always_show=True)
-
+        # print_debug(f"Failed to open relative manifest [{path_to_manifest}], try fallback...", always_show=True)
+        pass
+    
     import io
     import requests
     response = requests.get(path_to_manifest)
