@@ -320,9 +320,11 @@ class DjangoViteAppClient:
             production_server_url = urljoin(prefix, path)
 
         if apps.is_installed("django.contrib.staticfiles"):
-            from django.contrib.staticfiles.storage import staticfiles_storage
-
-            return staticfiles_storage.url(production_server_url)
+            # Use STATIC_URL directly instead of staticfiles_storage.url().
+            # Vite already content-hashes its output filenames (e.g. home-CxfwoZB-.js).
+            # staticfiles_storage.url() with ManifestStaticFilesStorage adds a second
+            # hash, causing the browser to load entry-point JS twice (double execution).
+            return urljoin(settings.STATIC_URL, production_server_url)
 
         return production_server_url
 
